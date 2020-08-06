@@ -22,6 +22,7 @@
 #ifdef USE_PRAGMA_INTERFACE
 #pragma interface			/* gcc class implementation */
 #endif
+#include "tztime.h"
 
 class MY_LOCALE;
 
@@ -576,6 +577,7 @@ public:
   Item_temporal_func(THD *thd, Item *a): Item_func(thd, a) {}
   Item_temporal_func(THD *thd, Item *a, Item *b): Item_func(thd, a, b) {}
   Item_temporal_func(THD *thd, Item *a, Item *b, Item *c): Item_func(thd, a, b, c) {}
+  Item_temporal_func(THD *thd, Item *a, Item *b, Item *c, Item *d): Item_func(thd, a, b, c, d) {}
   String *val_str(String *str);
   longlong val_int() { return val_int_from_date(); }
   double val_real() { return val_real_from_date(); }
@@ -655,8 +657,12 @@ class Item_datetimefunc :public Item_temporal_func
 public:
   Item_datetimefunc(THD *thd): Item_temporal_func(thd) {}
   Item_datetimefunc(THD *thd, Item *a): Item_temporal_func(thd, a) {}
+  Item_datetimefunc(THD *thd, Item *a, Item *b):
+    Item_temporal_func(thd, a, b) {}
   Item_datetimefunc(THD *thd, Item *a, Item *b, Item *c):
     Item_temporal_func(thd, a, b ,c) {}
+  Item_datetimefunc(THD *thd, Item *a, Item *b, Item *c, Item *d):
+    Item_temporal_func(thd, a, b ,c, d) {}
   const Type_handler *type_handler() const { return &type_handler_datetime2; }
 };
 
@@ -852,9 +858,11 @@ class Item_func_date_format :public Item_str_func
   bool check_arguments() const
   {
     return args[0]->check_type_can_return_date(func_name()) ||
+           (arg_count > 1 && args[1]->is_null()) ||
            check_argument_types_can_return_text(1, arg_count);
   }
   const MY_LOCALE *locale;
+  bool from_unix_time;
   int fixed_length;
   String value;
 protected:
@@ -862,9 +870,14 @@ protected:
 public:
   Item_func_date_format(THD *thd, Item *a, Item *b):
     Item_str_func(thd, a, b), locale(0), is_time_format(false) {}
+  Item_func_date_format(THD *thd, bool u, Item *a, Item *b):
+    Item_str_func(thd, a, b), locale(0), from_unix_time(u), is_time_format(false) {}
   Item_func_date_format(THD *thd, Item *a, Item *b, Item *c):
     Item_str_func(thd, a, b, c), locale(0), is_time_format(false) {}
+  Item_func_date_format(THD *thd, bool u, Item *a, Item *b, Item *c):
+    Item_str_func(thd, a, b, c), locale(0), from_unix_time(u), is_time_format(false) {}
   String *val_str(String *str);
+  virtual void print(String *str, enum_query_type query_type);
   const char *func_name() const { return "date_format"; }
   bool fix_length_and_dec();
   uint format_length(const String *format);
@@ -894,24 +907,36 @@ public:
 class Item_func_from_unixtime :public Item_datetimefunc
 {
   bool check_arguments() const
-  { return args[0]->check_type_can_return_decimal(func_name()); }
+  {
+    if (arg_count > 1 && !tz)
+    {
+      my_error(ER_UNKNOWN_TIME_ZONE, MYF(0), args[arg_count-1]->val_str());
+      return false;
+    }
+    return args[0]->check_type_can_return_decimal(func_name());
+  }
+  Time_zone *tz;
  public:
-  /**
-  * @brief tz can be set during creation (3 args function call)
-  * or during the fix_length_and_dec, where if still null, the current session one
-  * will be used
-  */
-  Time_zone* tz = nullptr;
-  Item_func_from_unixtime(THD *thd, Item *a): Item_datetimefunc(thd, a) {}
+  Item_func_from_unixtime(THD *thd, Item *a): Item_datetimefunc(thd, a), tz(0) {}
+  Item_func_from_unixtime(THD *thd, Item *a, Item *b): Item_datetimefunc(thd, a, b) {
+    tz= my_tz_find(thd, b->val_str());
+  }
+  Item_func_from_unixtime(THD *thd, Item *a, Item *b, Item *c, Item *d):
+    Item_datetimefunc(thd, a, b, c, d) {
+    tz= my_tz_find(thd, d->val_str());
+  }
   const char *func_name() const { return "from_unixtime"; }
   bool fix_length_and_dec();
   bool get_date(MYSQL_TIME *res, ulonglong fuzzy_date);
   bool check_vcol_func_processor(void *arg)
   {
-    return false;
+    if (arg_count >= 2)
+      return false;
+    return mark_unsupported_function(func_name(), "()", arg, VCOL_SESSION_FUNC);
   }
   Item *get_copy(THD *thd)
   { return get_item_copy<Item_func_from_unixtime>(thd, this); }
+  friend class Item_func_date_format;
 };
 
 
