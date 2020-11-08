@@ -1985,6 +1985,11 @@ uint Item_func_date_format::format_length(const String *format)
   return size;
 }
 
+bool Item_func_date_format::check_arguments() const
+{
+  return args[0]->check_type_can_return_date(func_name()) ||
+         check_argument_types_can_return_text(1, arg_count);
+}
 
 String *Item_func_date_format::val_str(String *str)
 {
